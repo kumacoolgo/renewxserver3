@@ -1,4 +1,4 @@
-# renewxserver2
+# renewxserver3
 
 Telegram bot for XServer free VPS multi-account monitoring and renewal reminders.
 
@@ -9,9 +9,9 @@ This version uses [CloakBrowser](https://github.com/CloakHQ/CloakBrowser) instea
 - Telegram bot account management
 - Multiple XServer accounts
 - Automatic XServer login and free VPS expiry detection
-- Renewal reminder when the remaining days are less than or equal to `RENEWAL_THRESHOLD_DAYS`
-- Japan-time scheduler: starts at 02:00, then runs every 4 hours
-- Telegram notification only when an account needs manual renewal or detection fails
+- Daily 06:00 Japan-time report showing every account's expiry date
+- Daily 12:10 Japan-time recheck
+- Urgent `❗ 需要及时更新` warning when an account has 0 days remaining
 - Docker image ready for Zeabur deployment
 
 ## Telegram Commands
@@ -27,11 +27,11 @@ This version uses [CloakBrowser](https://github.com/CloakHQ/CloakBrowser) instea
 
 ## Schedule
 
-Automatic jobs run in Japan time at:
+Automatic jobs run in Japan time:
 
-`02:00`, `06:00`, `10:00`, `14:00`, `18:00`, `22:00`
-
-For every account, the job checks the free VPS expiry date. If every account is healthy, the scheduled job stays silent. If an account needs manual renewal or detection fails, the Telegram admin receives a message.
+- `06:00`: check every account and send a complete expiry-date report.
+- `12:10`: check every account again. Accounts with 0 days remaining are marked
+  `❗ 需要及时更新`; if all accounts are healthy, this check stays silent.
 
 ## Zeabur Deployment
 

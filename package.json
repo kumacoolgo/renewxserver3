@@ -1,5 +1,5 @@
 {
-  "name": "renewxserver2",
+  "name": "renewxserver3",
   "version": "1.0.0",
   "description": "XServer VPS monitoring and renewal reminder bot with Telegram interface",
   "main": "bot.js",

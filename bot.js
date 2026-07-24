@@ -55,11 +55,11 @@ function escapeMarkdown(text) {
 function formatResult(account, result) {
   const name = escapeMarkdown(account.username);
   if (result.success) {
-    if (result.needsRenewal || result.action === 'needs_renewal') {
-      return `⚠️ *${name}*\n需要手动更新\n到期日: ${escapeMarkdown(result.expiryDate)}\n剩余: ${result.daysLeft} 天`;
+    if (result.daysLeft <= 0) {
+      return `❗ *${name}*\n需要及时更新\n有效期: ${escapeMarkdown(result.expiryDate)}\n剩余: ${result.daysLeft} 天`;
     }
 
-    return `✅ *${name}*\n无需更新\n到期日: ${escapeMarkdown(result.expiryDate)}\n剩余: ${result.daysLeft} 天`;
+    return `✅ *${name}*\n有效期: ${escapeMarkdown(result.expiryDate)}\n剩余: ${result.daysLeft} 天`;
   }
 
   return `❌ *${name}*\n${escapeMarkdown(result.error || result.message || '检测失败')}`;
@@ -77,10 +77,10 @@ async function runAccount(account, { notifyFailure = false } = {}) {
     );
   }
 
-  if (notifyFailure && result.success && (result.needsRenewal || result.action === 'needs_renewal')) {
+  if (notifyFailure && result.success && result.daysLeft <= 0) {
     await bot.sendMessage(
       ADMIN_ID,
-      `⚠️ 需要手动更新\n\n账号: ${account.username}\n到期日: ${result.expiryDate}\n剩余: ${result.daysLeft} 天`
+      `❗ 需要及时更新\n\n账号: ${account.username}\n有效期: ${result.expiryDate}\n剩余: ${result.daysLeft} 天`
     );
   }
 
@@ -100,7 +100,7 @@ async function checkAll({ notifyFailure = false } = {}) {
 }
 
 function shouldNotifyResult(result) {
-  return !result.success || result.needsRenewal || result.action === 'needs_renewal';
+  return !result.success || result.daysLeft <= 0;
 }
 
 function nextJapanSlot(from = new Date()) {
@@ -124,29 +124,52 @@ function nextJapanSlot(from = new Date()) {
   const hour = Number(jstParts.hour) === 24 ? 0 : Number(jstParts.hour);
   const minute = Number(jstParts.minute);
   const second = Number(jstParts.second);
-  const slots = [2, 6, 10, 14, 18, 22];
+  const slots = [
+    { hour: 6, minute: 0, type: 'morning' },
+    { hour: 12, minute: 10, type: 'noon' },
+  ];
   const currentSeconds = hour * 3600 + minute * 60 + second;
-  const nextHour = slots.find((slot) => slot * 3600 > currentSeconds);
-  const targetJstMs = Date.UTC(year, month - 1, day + (nextHour == null ? 1 : 0), nextHour ?? 2, 0, 0);
+  const nextSlot = slots.find((slot) => slot.hour * 3600 + slot.minute * 60 > currentSeconds);
+  const target = nextSlot || slots[0];
+  const targetJstMs = Date.UTC(
+    year,
+    month - 1,
+    day + (nextSlot ? 0 : 1),
+    target.hour,
+    target.minute,
+    0
+  );
 
   // Convert the wall-clock JST target to UTC by subtracting 9 hours.
-  return new Date(targetJstMs - 9 * 3600 * 1000);
+  return {
+    time: new Date(targetJstMs - 9 * 3600 * 1000),
+    type: target.type,
+  };
 }
 
 function scheduleNextAutoCheck() {
   const next = nextJapanSlot();
-  const delay = Math.max(1000, next.getTime() - Date.now());
-  console.log(`Next auto check: ${next.toISOString()} (JST slot anchored at 02:00 every 4 hours)`);
+  const delay = Math.max(1000, next.time.getTime() - Date.now());
+  console.log(`Next auto check: ${next.time.toISOString()} (JST: 06:00 and 12:10)`);
 
   setTimeout(async () => {
     try {
       if (autoJobRunning) return;
       autoJobRunning = true;
       const results = await checkAll({ notifyFailure: false });
-      const alerts = results.filter(({ result }) => shouldNotifyResult(result));
-      if (alerts.length) {
-        const lines = alerts.map(({ account, result }) => formatResult(account, result));
-        await bot.sendMessage(ADMIN_ID, `自动检测提醒：\n\n${lines.join('\n\n')}`, { parse_mode: 'MarkdownV2' });
+      const report =
+        next.type === 'morning'
+          ? results
+          : results.filter(({ result }) => shouldNotifyResult(result));
+      if (report.length) {
+        const title =
+          next.type === 'morning'
+            ? '早上 6:00 全部账号有效期'
+            : '中午 12:10 更新提醒';
+        const lines = report.map(({ account, result }) => formatResult(account, result));
+        await bot.sendMessage(ADMIN_ID, `${title}\n\n${lines.join('\n\n')}`, {
+          parse_mode: 'MarkdownV2',
+        });
       }
     } catch (err) {
       await bot.sendMessage(ADMIN_ID, `❌ 自动检测任务异常: ${err.message}`);
@@ -162,11 +185,11 @@ bot.onText(/\/start/, (msg) => {
   bot.sendMessage(
     msg.chat.id,
     [
-      '*renewxserver2*',
+      '*renewxserver3*',
       '',
       'XServer 免费 VPS 到期监测和提醒机器人。',
-      '每天日本时间 02:00 开始，每 4 小时自动检测一次。',
-      '发现需要手动更新的账号时才会提醒；全部正常则不提醒。',
+      '每天日本时间 06:00 检测并显示所有账号有效期。',
+      '每天 12:10 再检测一次，剩余 0 天时显示 ❗并提醒及时更新。',
       '',
       '/add 添加账号',
       '/list 查看账号',
@@ -181,7 +204,7 @@ bot.onText(/\/help/, (msg) => {
   if (!requireAdmin(msg)) return;
   bot.sendMessage(
     msg.chat.id,
-    '命令：/add、/list、/check、/delete <id>。自动任务会在日本时间 02:00 起每 4 小时运行；只有需要手动更新或检测失败时才提醒。',
+    '命令：/add、/list、/check、/delete <id>。自动任务在日本时间 06:00 汇报全部账号有效期，并在 12:10 复查剩余 0 天的账号。',
     { reply_markup: menu() }
   );
 });
@@ -267,7 +290,7 @@ bot.on('message', async (msg) => {
   if (text === '帮助') {
     return bot.sendMessage(
       msg.chat.id,
-      '命令：/add、/list、/check、/delete <id>。自动任务会在日本时间 02:00 起每 4 小时运行；只有需要手动更新或检测失败时才提醒。',
+      '命令：/add、/list、/check、/delete <id>。自动任务在日本时间 06:00 汇报全部账号有效期，并在 12:10 复查剩余 0 天的账号。',
       { reply_markup: menu() }
     );
   }
@@ -321,4 +344,4 @@ if (RUN_ON_START) {
   }, 15000);
 }
 
-console.log('renewxserver2 bot started');
+console.log('renewxserver3 bot started');
