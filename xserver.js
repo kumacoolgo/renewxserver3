@@ -13,6 +13,8 @@ const BROWSER_GEOIP =
 const BROWSER_TIMEZONE = process.env.BROWSER_TIMEZONE || 'Asia/Tokyo';
 const BROWSER_LOCALE = process.env.BROWSER_LOCALE || 'ja-JP';
 const CLEAR_PROFILE_CACHE = process.env.CLEAR_PROFILE_CACHE !== 'false';
+const activeAccountChecks = new Map();
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -101,7 +103,31 @@ async function launchAccountContext(account) {
 
   if (BROWSER_PROXY) options.proxy = BROWSER_PROXY;
 
-  return launchPersistentContext(options);
+  const retryDelays = [0, 5000, 10000];
+  let lastError;
+
+  for (let attempt = 0; attempt < retryDelays.length; attempt += 1) {
+    const delay = retryDelays[attempt];
+    if (delay) await sleep(delay);
+    try {
+      return await launchPersistentContext(options);
+    } catch (err) {
+      lastError = err;
+      if (!String(err.message || err).includes('Opening in existing browser session')) {
+        throw err;
+      }
+      const nextDelay = retryDelays[attempt + 1];
+      if (nextDelay != null) {
+        console.warn(
+          `[xserver] Profile is busy for account ${account.id}; retrying after ${nextDelay}ms`
+        );
+      }
+    }
+  }
+
+  throw new Error(
+    `账号 ${account.id} 的浏览器配置仍被占用，请稍后再试。原始错误: ${lastError.message}`
+  );
 }
 
 async function clickFirst(page, selectors, timeout = 8000) {
@@ -290,12 +316,13 @@ async function extractFreeVpsDetailFromPage(page) {
   }).catch(() => ({ expiryText: '', detailHref: page.url() }));
 }
 
-async function checkAccount(account) {
-  const context = await launchAccountContext(account);
-  const page = context.pages()[0] || await context.newPage();
+async function checkAccountUnlocked(account) {
+  let context;
   const userDataDir = path.join(PROFILE_DIR, `${account.id}-${safeName(account.username)}`);
 
   try {
+    context = await launchAccountContext(account);
+    const page = context.pages()[0] || await context.newPage();
     await ensureLoggedIn(page, account);
     const result = await getFreeVpsInfo(page);
     if (!result.success) return result;
@@ -320,9 +347,28 @@ async function checkAccount(account) {
       error: err.message,
     };
   } finally {
-    await context.close().catch(() => {});
-    cleanupProfileCache(userDataDir);
+    if (context) {
+      await context.close().catch(() => {});
+      cleanupProfileCache(userDataDir);
+    }
   }
+}
+
+function checkAccount(account) {
+  const key = `${account.id}-${safeName(account.username)}`;
+  const existing = activeAccountChecks.get(key);
+  if (existing) {
+    console.log(`[xserver] Reusing active check for account ${account.id}`);
+    return existing;
+  }
+
+  const check = checkAccountUnlocked(account).finally(() => {
+    if (activeAccountChecks.get(key) === check) {
+      activeAccountChecks.delete(key);
+    }
+  });
+  activeAccountChecks.set(key, check);
+  return check;
 }
 
 module.exports = {

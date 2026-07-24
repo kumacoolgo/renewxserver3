@@ -99,4 +99,7 @@ On Windows with very new Node versions, `sqlite3` may require Visual Studio C++ 
 
 - Credentials are stored in SQLite at `/data/accounts.db`; keep the Zeabur volume private.
 - If XServer changes its UI selectors or blocks detection, the bot sends a Telegram failure notification with the reason.
+- Concurrent requests for the same account share one active browser check. A
+  profile temporarily occupied by another service instance is retried before
+  the bot reports an actionable error.
 - This bot does not perform automatic renewal and does not submit XServer renewal forms.
